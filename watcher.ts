@@ -229,10 +229,8 @@ export class MailboxWatcher extends EventTarget {
       // closed the socket), return so the outer loop reconnects.
       if (conn.dead) return;
 
-      // Only fetch if IDLE ended due to a mail event.
-      if (!mailArrived) continue;
-
-      // Fetch the new messages as EmailMessage instances.
+      // Always fetch unseen after idle ends.  Mail may have arrived
+      // during a keepalive cycle or while we were reconnecting.
       const unseen = await this.#fetchAndParse(conn);
       if (unseen.length > 0) {
         await this.#markSeen(conn, unseen);
