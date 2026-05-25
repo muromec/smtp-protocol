@@ -1,0 +1,12 @@
+{
+  "name": "email-connector",
+  "version": "0.1.0",
+  "description": "Email message parsing and high-level mailbox watching on top of imap-connector",
+  "type": "module",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "dependencies": {
+    "imap-connector": "*",
+    "postal-mime": "^2.7.4"
+  }
+}
