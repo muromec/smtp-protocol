@@ -4,3 +4,4 @@ export {
   type WatcherConfig,
   type WatcherEvent,
 } from "./watcher.ts";
+export { SmtpSender, type SmtpConfig } from "./smtp.ts";

@@ -156,7 +156,11 @@ export class MailboxWatcher extends EventTarget {
    */
   async #fetchAndParse(conn: Connection): Promise<EmailMessage[]> {
     const raw = await conn.fetchUnseen();
-    return raw.map((m) => new EmailMessage(m));
+    const msgs: EmailMessage[] = [];
+    for (const m of raw) {
+      msgs.push(await EmailMessage.fromFetched(m));
+    }
+    return msgs;
   }
 
   /**

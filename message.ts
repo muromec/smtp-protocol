@@ -14,37 +14,116 @@ export interface EmailHeaders {
   contentType?: string;
 }
 
+
+
 // ── EmailMessage ───────────────────────────────────────────────────────────
 
 type Parsed = Awaited<ReturnType<typeof PostalMime.parse>>;
 
+export interface OutgoingEmail {
+  from: string;
+  to: string;
+  subject: string;
+  text: string;
+  inReplyTo?: string;
+  references?: string[];
+  messageId?: string;
+}
+
 /**
- * Wraps a raw RFC822 message with parsed headers and body, plus a
+ * Wraps an email message with parsed headers and body, plus a
  * selective logging representation that omits noisy transport headers
  * (Received, ARC, DKIM, spam verdicts, etc.).
  *
- * Parsing is eager: PostalMime runs synchronously in practice (it wraps
- * its result in Promise.resolve), so we call it in the constructor and
- * all accessors are synchronous.
+ * Two construction paths:
+ *   - Inbound:  `await EmailMessage.fromFetched(msg)` — parses raw RFC822.
+ *   - Outbound: `EmailMessage.compose({...})` — builds from fields.
+ *
+ * Use `fromFetched` for inbound messages (async parse).
  */
 export class EmailMessage {
   readonly uid: number;
   readonly raw: string;
-  #parsed: Parsed;
+  readonly outbound: boolean;
+  #parsed: Parsed | null = null;
+  #parsePromise: Promise<Parsed> | null = null;
+  #outboundHeaders: EmailHeaders;
+  #outboundText: string;
 
-  constructor(msg: FetchedMessage) {
-    this.uid = msg.uid;
-    this.raw = msg.body;
-    // PostalMime.parse is sync in practice; the returned promise
-    // resolves immediately.  We call it here so all accessors can
-    // be synchronous.  If the parse throws, the constructor throws.
-    this.#parsed = PostalMime.parse(msg.body) as unknown as Parsed;
+  private constructor() {
+    this.uid = 0;
+    this.raw = "";
+    this.outbound = false;
+    this.#outboundHeaders = {} as EmailHeaders;
+    this.#outboundText = "";
+  }
+
+  /**
+   * Create an EmailMessage from a raw RFC822 fetched message.
+   * Parsing runs asynchronously; accessors will throw if called
+   * before the returned promise resolves.
+   */
+  static async fromFetched(msg: FetchedMessage): Promise<EmailMessage> {
+    const self = new EmailMessage();
+    (self as { uid: number }).uid = msg.uid;
+    (self as { raw: string }).raw = msg.body;
+    self.#parsePromise = PostalMime.parse(msg.body);
+    self.#parsed = await self.#parsePromise;
+    return self;
+  }
+
+  /**
+   * Create an outgoing email message from structured fields.
+   * The `uid` is set to 0 (not applicable).
+   */
+  static compose(opts: OutgoingEmail): EmailMessage {
+    const msg = new EmailMessage();
+    (msg as { uid: number }).uid = 0;
+    (msg as { outbound: boolean }).outbound = true;
+    msg.#outboundHeaders = {
+      from: { address: opts.from, name: "" },
+      to: [{ address: opts.to, name: "" }],
+      subject: opts.subject,
+      messageId: opts.messageId,
+      inReplyTo: opts.inReplyTo,
+      references: opts.references ?? [],
+      date: new Date(),
+    };
+    msg.#outboundText = opts.text;
+    (msg as { raw: string }).raw = msg.toRfc822();
+    return msg;
+  }
+
+  /**
+   * Serialize to a full RFC822 message suitable for SMTP submission.
+   */
+  toRfc822(): string {
+    const h = this.headers;
+    const headers = [
+      "MIME-Version: 1.0",
+      "User-Agent: Mozilla Thunderbird",
+      "Content-Language: en-US",
+      h.messageId ? `Message-ID: ${h.messageId}` : "",
+      h.inReplyTo ? `In-Reply-To: ${h.inReplyTo}` : "",
+      `References: ${h.references.join(" ")}`,
+      `To: ${h.to?.map((t) => t.name ? `${t.name} <${t.address ?? ""}>` : (t.address ?? "")).join(", ") ?? ""}`,
+      `From: ${h.from?.name ? `${h.from.name} <${h.from.address ?? ""}>` : (h.from?.address ?? "")}`,
+      `Subject: ${h.subject ?? ""}`,
+      `Date: ${(h.date ?? new Date()).toUTCString()}`,
+      "Content-Type: text/plain; charset=UTF-8; format=flowed",
+      "Content-Transfer-Encoding: 7bit",
+    ]
+      .filter(Boolean)
+      .join("\r\n");
+
+    return `${headers}\r\n\r\n${this.text}`;
   }
 
   // ── headers ────────────────────────────────────────────────────────────
 
   get headers(): EmailHeaders {
-    const p = this.#parsed;
+    if (this.outbound) return this.#outboundHeaders;
+    const p = this.#parsed!;
     return {
       messageId: p.messageId,
       inReplyTo: p.inReplyTo,
@@ -68,14 +147,15 @@ export class EmailMessage {
    * Plain-text body, trimmed.
    */
   get text(): string {
-    return (this.#parsed.text ?? "").trim();
+    if (this.outbound) return this.#outboundText;
+    return (this.#parsed!.text ?? "").trim();
   }
 
   /**
    * HTML body, if present.
    */
   get html(): string | undefined {
-    return this.#parsed.html ?? undefined;
+    return this.#parsed?.html ?? undefined;
   }
 
   // ── logging ─────────────────────────────────────────────────────────────
@@ -90,10 +170,10 @@ export class EmailMessage {
     const h = this.headers;
     const lines: string[] = [];
 
-    if (h.from) lines.push(`From: ${h.from.name ?? ""} <${h.from.address ?? ""}>`.trim());
+    if (h.from) lines.push(`From: ${h.from.name ? `${h.from.name} <${h.from.address ?? ""}>` : (h.from.address ?? "")}`);
     if (h.to?.length) {
       lines.push(
-        `To: ${h.to.map((t) => `${t.name ?? ""} <${t.address ?? ""}>`.trim()).join(", ")}`,
+        `To: ${h.to.map((t) => t.name ? `${t.name} <${t.address ?? ""}>` : (t.address ?? "")).join(", ")}`,
       );
     }
     if (h.subject) lines.push(`Subject: ${h.subject}`);
@@ -112,9 +192,9 @@ export class EmailMessage {
   }
 
   /**
-   * Full raw message with all headers — for when you really need everything.
+   * Full raw message (inbound) or RFC822 serialization (outbound).
    */
   toString(): string {
-    return this.raw;
+    return this.outbound ? this.toRfc822() : this.raw;
   }
 }
