@@ -27,6 +27,7 @@ export interface OutgoingEmail {
   text: string;
   inReplyTo?: string;
   references?: string[];
+  /** Auto-generated from `from` domain if omitted. */
   messageId?: string;
 }
 
@@ -74,9 +75,14 @@ export class EmailMessage {
 
   /**
    * Create an outgoing email message from structured fields.
+   * A Message-ID is generated automatically from the `from` domain
+   * unless `opts.messageId` is explicitly provided.
    * The `uid` is set to 0 (not applicable).
    */
   static compose(opts: OutgoingEmail): EmailMessage {
+    const domain = opts.from.split("@")[1] ?? "localhost";
+    const messageId = opts.messageId ?? `<${crypto.randomUUID()}@${domain}>`;
+
     const msg = new EmailMessage();
     (msg as { uid: number }).uid = 0;
     (msg as { outbound: boolean }).outbound = true;
@@ -84,7 +90,7 @@ export class EmailMessage {
       from: { address: opts.from, name: "" },
       to: [{ address: opts.to, name: "" }],
       subject: opts.subject,
-      messageId: opts.messageId,
+      messageId,
       inReplyTo: opts.inReplyTo,
       references: opts.references ?? [],
       date: new Date(),
@@ -141,6 +147,22 @@ export class EmailMessage {
    */
   get from(): string | undefined {
     return this.headers.from?.address;
+  }
+
+  /**
+   * Build a reply to this message.  Pre-fills In-Reply-To and
+   * References from this message's headers.  A Message-ID is
+   * auto-generated unless `opts.messageId` is provided.
+   */
+  reply(opts: Omit<OutgoingEmail, "inReplyTo" | "references">): EmailMessage {
+    const h = this.headers;
+    const refs = [...h.references];
+    if (h.messageId && !refs.includes(h.messageId)) refs.push(h.messageId);
+    return EmailMessage.compose({
+      ...opts,
+      inReplyTo: h.messageId,
+      references: refs,
+    });
   }
 
   /**

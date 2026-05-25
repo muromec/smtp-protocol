@@ -114,7 +114,6 @@ describe("EmailMessage composing", () => {
       text: "response body",
       inReplyTo: "<inbound@example.com>",
       references: ["<root@example.com>", "<inbound@example.com>"],
-      messageId: "<reply123@example.com>",
     });
 
     expect(msg.uid).toBe(0);
@@ -130,7 +129,7 @@ describe("EmailMessage composing", () => {
       "<root@example.com>",
       "<inbound@example.com>",
     ]);
-    expect(msg.headers.messageId).toBe("<reply123@example.com>");
+    expect(msg.headers.messageId).toMatch(/^<[^>]+@example\.com>$/);
     expect(msg.headers.date).toBeInstanceOf(Date);
   });
 
@@ -140,14 +139,13 @@ describe("EmailMessage composing", () => {
       to: "alice@example.com",
       subject: "Test",
       text: "hello",
-      messageId: "<mid@example.com>",
     });
 
     const rfc = msg.toRfc822();
     expect(rfc).toContain("From: bot@example.com");
     expect(rfc).toContain("To: alice@example.com");
     expect(rfc).toContain("Subject: Test");
-    expect(rfc).toContain("Message-ID: <mid@example.com>");
+    expect(rfc).toMatch(/Message-ID: <[^>]+@example\.com>/);
     expect(rfc).toContain("MIME-Version: 1.0");
     expect(rfc).toContain("Content-Type: text/plain; charset=UTF-8");
     expect(rfc).toContain("\r\n\r\nhello");
@@ -161,7 +159,6 @@ describe("EmailMessage composing", () => {
       text: "reply",
       inReplyTo: "<orig@example.com>",
       references: ["<root@example.com>", "<orig@example.com>"],
-      messageId: "<r@example.com>",
     });
 
     const rfc = msg.toRfc822();
@@ -247,7 +244,6 @@ describe("EmailMessage.logString", () => {
       to: "alice@example.com",
       subject: "Re: Test",
       text: "outbound body",
-      messageId: "<out@example.com>",
     });
 
     const log = msg.logString;
