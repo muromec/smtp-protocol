@@ -225,6 +225,10 @@ export class MailboxWatcher extends EventTarget {
 
       if (signal.aborted) break;
 
+      // If the connection died during the DONE/drain phase (server
+      // closed the socket), return so the outer loop reconnects.
+      if (conn.dead) return;
+
       // Only fetch if IDLE ended due to a mail event.
       if (!mailArrived) continue;
 
