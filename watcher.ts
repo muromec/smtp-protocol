@@ -58,6 +58,7 @@ export interface WatcherEvent {
 export class MailboxWatcher extends EventTarget {
   #config: WatcherConfig;
   #abortController: AbortController | null = null;
+  #activeConn: Connection | null = null;
 
   constructor(config: WatcherConfig) {
     super();
@@ -79,6 +80,7 @@ export class MailboxWatcher extends EventTarget {
 
     while (!signal.aborted) {
       let conn: Connection | null = null;
+      this.#activeConn = null;
       try {
         conn = new Connection({
           user: this.#config.user,
@@ -90,6 +92,7 @@ export class MailboxWatcher extends EventTarget {
         });
 
         await conn.connect();
+        this.#activeConn = conn;
 
         if (!conn.serverSupports("IDLE")) {
           this.#emit({
@@ -130,6 +133,8 @@ export class MailboxWatcher extends EventTarget {
 
   /** Stop watching.  The running IDLE session will exit cleanly. */
   stop(): void {
+    this.#activeConn?.close().catch(() => {});
+    this.#activeConn = null;
     this.#abortController?.abort();
     this.#abortController = null;
   }
