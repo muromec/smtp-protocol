@@ -22,6 +22,7 @@ type Parsed = Awaited<ReturnType<typeof PostalMime.parse>>;
 
 export interface OutgoingEmail {
   from: string;
+  fromName?: string;
   to: string;
   subject: string;
   text: string;
@@ -87,7 +88,7 @@ export class EmailMessage {
     (msg as { uid: number }).uid = 0;
     (msg as { outbound: boolean }).outbound = true;
     msg.#outboundHeaders = {
-      from: { address: opts.from, name: "" },
+      from: { address: opts.from, name: opts.fromName ?? "" },
       to: [{ address: opts.to, name: "" }],
       subject: opts.subject,
       messageId,
