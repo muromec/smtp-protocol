@@ -1,5 +1,5 @@
-import { SMTPClient, type SMTPClientOptions } from "smtp-client";
-import { EmailMessage } from "./message.ts";
+import { SMTPClient, type SMTPClientOptions } from 'smtp-client';
+import { EmailMessage } from './message.ts';
 
 // ── types ──────────────────────────────────────────────────────────────────
 
