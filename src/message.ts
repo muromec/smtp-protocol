@@ -1,5 +1,4 @@
 import PostalMime from 'postal-mime';
-import type { FetchedMessage } from 'imap-connector';
 
 // ── types ──────────────────────────────────────────────────────────────────
 
@@ -36,7 +35,7 @@ export interface OutgoingEmail {
  * (Received, ARC, DKIM, spam verdicts, etc.).
  *
  * Two construction paths:
- *   - Inbound:  `await EmailMessage.fromFetched(msg)` — parses raw RFC822.
+ *   - Inbound:  `await EmailMessage.fromFetched(body, uid?)` — parses raw RFC822.
  *   - Outbound: `EmailMessage.compose({...})` — builds from fields.
  *
  * Use `fromFetched` for inbound messages (async parse).
@@ -59,15 +58,18 @@ export class EmailMessage {
   }
 
   /**
-   * Create an EmailMessage from a raw RFC822 fetched message.
+   * Create an EmailMessage from a raw RFC822 message body.
    * Parsing runs asynchronously; accessors will throw if called
    * before the returned promise resolves.
+   *
+   * @param body  The raw RFC822 message text.
+   * @param uid   Optional IMAP UID (defaults to 0 when not applicable).
    */
-  static async fromFetched(msg: FetchedMessage): Promise<EmailMessage> {
+  static async fromFetched(body: string, uid?: number): Promise<EmailMessage> {
     const self = new EmailMessage();
-    (self as { uid: number }).uid = msg.uid;
-    (self as { raw: string }).raw = msg.body;
-    self.#parsePromise = PostalMime.parse(msg.body);
+    (self as { uid: number }).uid = uid ?? 0;
+    (self as { raw: string }).raw = body;
+    self.#parsePromise = PostalMime.parse(body);
     self.#parsed = await self.#parsePromise;
     return self;
   }

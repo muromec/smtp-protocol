@@ -2,17 +2,11 @@
 
 import { describe, it, expect } from 'vitest';
 import { EmailMessage } from '../src/message.ts';
-import type { FetchedMessage } from 'imap-connector';
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
-function rawMsg(headers: string[], body: string): FetchedMessage {
-  return {
-    uid: 42,
-    seqno: 1,
-    flags: [],
-    body: [...headers, '', body].join('\r\n'),
-  };
+function rawMsg(headers: string[], body: string): string {
+  return [...headers, '', body].join('\r\n');
 }
 
 // ── parsing (inbound) ──────────────────────────────────────────────────────
@@ -243,7 +237,7 @@ describe('EmailMessage.toString', () => {
   it('returns raw RFC822 for inbound messages', async () => {
     const raw = rawMsg(['From: a@b.com', 'Subject: S'], 'body');
     const msg = await EmailMessage.fromFetched(raw);
-    expect(msg.toString()).toBe(raw.body);
+    expect(msg.toString()).toBe(raw);
   });
 
   it('returns serialized RFC822 for outbound messages', () => {
