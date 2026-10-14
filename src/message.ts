@@ -13,6 +13,14 @@ export interface EmailHeaders {
   contentType?: string;
 }
 
+/** A part of a message that is not its text body: what the sender called it, and its bytes. */
+export interface EmailAttachment {
+  /** The filename as sent; empty when the part carries none. */
+  name: string;
+  mime: string;
+  bytes: Uint8Array;
+}
+
 // ── EmailMessage ───────────────────────────────────────────────────────────
 
 type Parsed = Awaited<ReturnType<typeof PostalMime.parse>>;
@@ -181,6 +189,21 @@ export class EmailMessage {
     return this.#parsed?.html ?? undefined;
   }
 
+  /**
+   * The parts of this message that are not its text body, in the order they arrive.
+   *
+   * Every part the parser found is here, an image the html refers to included: which of
+   * them count as files is the caller's question, not this one's.
+   */
+  get attachments(): EmailAttachment[] {
+    if (this.outbound) return [];
+    return (this.#parsed?.attachments ?? []).map((part) => ({
+      name: part.filename ?? '',
+      mime: part.mimeType,
+      bytes: toBytes(part.content),
+    }));
+  }
+
   // ── logging ─────────────────────────────────────────────────────────────
 
   /**
@@ -223,4 +246,12 @@ export class EmailMessage {
   toString(): string {
     return this.outbound ? this.toRfc822() : this.raw;
   }
+}
+
+// ── helpers ────────────────────────────────────────────────────────────────
+
+/** The bytes of a parsed part, in whichever shape the parser handed them back. */
+function toBytes(content: ArrayBuffer | Uint8Array | string): Uint8Array {
+  if (typeof content === 'string') return new TextEncoder().encode(content);
+  return content instanceof Uint8Array ? content : new Uint8Array(content);
 }

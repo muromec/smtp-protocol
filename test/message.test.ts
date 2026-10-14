@@ -250,3 +250,87 @@ describe('EmailMessage.toString', () => {
     expect(msg.toString()).toBe(msg.toRfc822());
   });
 });
+
+// ── attachments ─────────────────────────────────────────────────────────────
+
+describe('EmailMessage attachments', () => {
+  const mixed = [
+    'From: Alice <alice@example.com>',
+    'To: bob@example.com',
+    'Subject: Report',
+    'MIME-Version: 1.0',
+    'Content-Type: multipart/mixed; boundary="MIXED"',
+    '',
+    '--MIXED',
+    'Content-Type: text/plain; charset=utf-8',
+    '',
+    'please take a look',
+    '--MIXED',
+    'Content-Type: application/pdf; name="report.pdf"',
+    'Content-Disposition: attachment; filename="report.pdf"',
+    'Content-Transfer-Encoding: base64',
+    '',
+    'JVBERi0xLjQK',
+    '--MIXED--',
+    '',
+  ].join('\r\n');
+
+  it('hands over an attached file with its name, type and bytes', async () => {
+    const msg = await EmailMessage.fromFetched(mixed);
+
+    expect(msg.text).toBe('please take a look');
+    expect(msg.attachments).toHaveLength(1);
+
+    const [file] = msg.attachments;
+    expect(file.name).toBe('report.pdf');
+    expect(file.mime).toBe('application/pdf');
+    expect(new TextDecoder().decode(file.bytes)).toBe('%PDF-1.4\n');
+  });
+
+  it('keeps a part the body points at', async () => {
+    // An image the html refers to by cid is still a part of the message; which
+    // parts count as files is the caller's question, not this one's.
+    const related = [
+      'From: Alice <alice@example.com>',
+      'MIME-Version: 1.0',
+      'Content-Type: multipart/related; boundary="REL"',
+      '',
+      '--REL',
+      'Content-Type: text/html; charset=utf-8',
+      '',
+      '<p>hi</p>',
+      '--REL',
+      'Content-Type: image/png; name="logo.png"',
+      'Content-Disposition: inline; filename="logo.png"',
+      'Content-ID: <logo@example.com>',
+      'Content-Transfer-Encoding: base64',
+      '',
+      'iVBORw0KGgo=',
+      '--REL--',
+      '',
+    ].join('\r\n');
+
+    const msg = await EmailMessage.fromFetched(related);
+    expect(msg.attachments.map((file) => file.name)).toEqual(['logo.png']);
+
+    const [file] = msg.attachments;
+    expect(file.mime).toBe('image/png');
+    expect(file.bytes.length).toBe(8);
+    expect(file.bytes[0]).toBe(0x89);
+  });
+
+  it('has nothing to hand over when the message is one text body', async () => {
+    const msg = await EmailMessage.fromFetched(rawMsg(['From: a@b.com'], 'hello'));
+    expect(msg.attachments).toEqual([]);
+  });
+
+  it('has nothing to hand over on an outbound message', () => {
+    const msg = EmailMessage.compose({
+      from: 'bot@example.com',
+      to: 'alice@example.com',
+      subject: 'Test',
+      text: 'hello',
+    });
+    expect(msg.attachments).toEqual([]);
+  });
+});
