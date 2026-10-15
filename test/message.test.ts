@@ -359,3 +359,58 @@ describe('a fetched body given as octets', () => {
     expect(msg.toString()).toBe(new TextDecoder().decode(octets));
   });
 });
+
+// ── a message carrying megabytes ────────────────────────────────────────────
+//
+// The parser reads every byte of a message, payload included, and that holds the
+// caller's event loop: a consumer owing a keepalive every 15 s loses its
+// connection while a 7 MB attachment is parsed.  The bound below is coarse on
+// purpose — the fast path is tens of milliseconds for this message and the slow
+// one seconds — so it is not a measurement of the parse; it names the regression,
+// which is a general-purpose parser scanning payload it has no reason to read.
+
+function heavyMessage(attachmentBytes: number): Uint8Array {
+  const wrapped = (Buffer.alloc(attachmentBytes, 0x41).toString('base64').match(/.{1,76}/g) ?? []).join(
+    '\r\n',
+  );
+  return new TextEncoder().encode(
+    [
+      'From: alice@example.com',
+      'To: bob@example.com',
+      'Subject: a shot',
+      'MIME-Version: 1.0',
+      'Content-Type: multipart/mixed; boundary="B"',
+      '',
+      '--B',
+      'Content-Type: text/plain; charset=utf-8',
+      '',
+      'here is the shot',
+      '--B',
+      'Content-Type: image/png; name="shot.png"',
+      'Content-Transfer-Encoding: base64',
+      'Content-Disposition: attachment; filename="shot.png"',
+      '',
+      wrapped,
+      '--B--',
+      '',
+    ].join('\r\n'),
+  );
+}
+
+describe('a message carrying megabytes', () => {
+  it('parses it without holding the loop, and hands the same parts over', async () => {
+    const attached = 2 * 1024 * 1024;
+    const body = heavyMessage(attached);
+
+    const t0 = performance.now();
+    const mail = await EmailMessage.fromFetched(body);
+    const took = performance.now() - t0;
+
+    expect(mail.text).toBe('here is the shot');
+    expect(mail.attachments.map((a) => [a.name, a.mime, a.bytes.length])).toEqual([
+      ['shot.png', 'image/png', attached],
+    ]);
+    expect(mail.attachments[0]?.bytes[0]).toBe(0x41);
+    expect(took).toBeLessThan(1500);
+  });
+});
