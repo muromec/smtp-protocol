@@ -111,6 +111,32 @@ quarter of a second does not need to take that risk.
   another process being up, and it only pays while the payload fits in memory
   anyway.
 
+## The dependency's own cost, and what a fork would buy
+
+A CPU profile of one 2 MB message (`bun --cpu-prof`) puts three quarters of the
+parse in three places, each small enough to name:
+
+| | self time | what it is |
+|---|---|---|
+| `readLine` (`postal-mime.js:171`) | ~50% | one JS iteration per byte, looking for the line end |
+| `decodeBase64` (`decode-strings.js:31`) | ~25% | a hand-written base-64 loop, four characters at a time |
+| `/[^a-zA-Z0-9+/]+/g` | ~4% | stripping whitespace before decoding |
+
+Both loops have native replacements: `av.indexOf(0x0a, pos)` for the line, and
+`Buffer.from(str, 'base64')` — which skips line breaks itself — for the decode.
+A copy of the package with exactly those two changes, parsing the same bytes:
+
+| message | published | two loops made native |
+|---|---|---|
+| synthetic 2 MB | 7 836 ms | 1 495 ms (5.2×) |
+| a real 6.78 MB photo | 26 103 ms | 4 927 ms (5.3×) |
+
+So a fork is a 5× win that still holds the loop for five seconds: the remaining
+fifth is the state machine and boundary handling, still per-byte, and would need
+a pass of its own.  It is worth doing on its own merits — it makes the parser
+faster for everything it reads, the header block this walk still hands it
+included — but it is not the fix for a payload.  The walk is, and this is the
+number that says so.
 ## Open
 
 - **Quoted-printable is the one place the two readings differ.**  Postal-mime
