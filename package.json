@@ -1,6 +1,6 @@
 {
-  "name": "smpt-protocol",
-  "version": "0.2.0",
+  "name": "smtp-protocol-ts",
+  "version": "0.3.0",
   "description": "Send email to SMTP in typescript",
   "type": "module",
   "main": "./dist/index.js",
