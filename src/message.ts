@@ -43,14 +43,15 @@ export interface OutgoingEmail {
  * (Received, ARC, DKIM, spam verdicts, etc.).
  *
  * Two construction paths:
- *   - Inbound:  `await EmailMessage.fromFetched(body, uid?)` — parses raw RFC822.
+ *   - Inbound:  `await EmailMessage.fromFetched(body, uid?)` — parses raw RFC822,
+ *     given as the octets a fetch handed over or as text.
  *   - Outbound: `EmailMessage.compose({...})` — builds from fields.
  *
  * Use `fromFetched` for inbound messages (async parse).
  */
 export class EmailMessage {
   readonly uid: number;
-  readonly raw: string;
+  readonly raw: string | Uint8Array;
   readonly outbound: boolean;
   #parsed: Parsed | null = null;
   #parsePromise: Promise<Parsed> | null = null;
@@ -66,17 +67,20 @@ export class EmailMessage {
   }
 
   /**
-   * Create an EmailMessage from a raw RFC822 message body.
+   * Create an EmailMessage from a fetched message.
    * Parsing runs asynchronously; accessors will throw if called
    * before the returned promise resolves.
    *
-   * @param body  The raw RFC822 message text.
+   * @param body  The message as fetched: the octets the server sent, or text.
+   *              Octets are the honest form — a body's charset lives in its own
+   *              headers, and a string that has been decoded has already lost
+   *              whatever was not valid UTF-8.
    * @param uid   Optional IMAP UID (defaults to 0 when not applicable).
    */
-  static async fromFetched(body: string, uid?: number): Promise<EmailMessage> {
+  static async fromFetched(body: string | Uint8Array, uid?: number): Promise<EmailMessage> {
     const self = new EmailMessage();
     (self as { uid: number }).uid = uid ?? 0;
-    (self as { raw: string }).raw = body;
+    (self as { raw: string | Uint8Array }).raw = body;
     self.#parsePromise = PostalMime.parse(body);
     self.#parsed = await self.#parsePromise;
     return self;
@@ -241,10 +245,13 @@ export class EmailMessage {
   }
 
   /**
-   * Full raw message (inbound) or RFC822 serialization (outbound).
+   * Full raw message (inbound) or RFC822 serialization (outbound).  For an
+   * inbound message that arrived as octets this is their text form, which is
+   * what printing wants; `raw` keeps the octets themselves.
    */
   toString(): string {
-    return this.outbound ? this.toRfc822() : this.raw;
+    if (this.outbound) return this.toRfc822();
+    return typeof this.raw === 'string' ? this.raw : new TextDecoder().decode(this.raw);
   }
 }
 
