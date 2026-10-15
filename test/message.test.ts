@@ -334,3 +334,28 @@ describe('EmailMessage attachments', () => {
     expect(msg.attachments).toEqual([]);
   });
 });
+
+// ── a fetched body is bytes ────────────────────────────────────────────────
+//
+// IMAP hands a message over as octets.  A string that has already been decoded
+// has lost whatever was not valid UTF-8, and the parser wants the octets so it
+// can read the charset the message itself declares.
+
+describe('a fetched body given as octets', () => {
+  it('parses it the same as the text form', async () => {
+    const raw = rawMsg(['From: a@b.com', 'Subject: S'], 'body');
+    const fromText = await EmailMessage.fromFetched(raw);
+    const fromOctets = await EmailMessage.fromFetched(new TextEncoder().encode(raw));
+
+    expect(fromOctets.headers.subject).toBe(fromText.headers.subject);
+    expect(fromOctets.text).toBe(fromText.text);
+  });
+
+  it('keeps the octets as given, and prints them as text', async () => {
+    const octets = new TextEncoder().encode(rawMsg(['From: a@b.com', 'Subject: S'], 'body'));
+    const msg = await EmailMessage.fromFetched(octets);
+
+    expect(msg.raw).toBe(octets);
+    expect(msg.toString()).toBe(new TextDecoder().decode(octets));
+  });
+});
