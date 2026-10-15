@@ -1,4 +1,5 @@
 import PostalMime from 'postal-mime';
+import { splitForParse, textOf, type LeafPlan } from './mime.ts';
 
 // ── types ──────────────────────────────────────────────────────────────────
 
@@ -81,7 +82,7 @@ export class EmailMessage {
     const self = new EmailMessage();
     (self as { uid: number }).uid = uid ?? 0;
     (self as { raw: string | Uint8Array }).raw = body;
-    self.#parsePromise = PostalMime.parse(body);
+    self.#parsePromise = parseFetched(body);
     self.#parsed = await self.#parsePromise;
     return self;
   }
@@ -261,4 +262,71 @@ export class EmailMessage {
 function toBytes(content: ArrayBuffer | Uint8Array | string): Uint8Array {
   if (typeof content === 'string') return new TextEncoder().encode(content);
   return content instanceof Uint8Array ? content : new Uint8Array(content);
+}
+
+/**
+ * Parse a fetched message.
+ *
+ * The parser reads the structure and the text.  A payload big enough that
+ * reading it would hold the caller's loop is decoded here instead, and put back
+ * where the parser would have found it — see `mime.ts` for why that is worth
+ * doing and `docs/parsing.md` for what it costs.
+ */
+async function parseFetched(body: string | Uint8Array): Promise<Parsed> {
+  const octets = typeof body === 'string' ? new TextEncoder().encode(body) : body;
+  const { forParser, leaves } = splitForParse(octets);
+  if (!leaves.some((leaf) => leaf.kind === 'heavy')) return PostalMime.parse(octets);
+
+  const parsed = await PostalMime.parse(forParser);
+  const stitched = stitch(parsed, leaves);
+  if (stitched) return stitched;
+
+  // The walk and the parser did not read the message the same way, so read it
+  // whole rather than hand back a guess.
+  console.error('[smtp-protocol] parse: the walk and the parser disagree, parsing the whole message');
+  return PostalMime.parse(octets);
+}
+
+/**
+ * The parsed message with the payloads the parser never saw put back, in the
+ * order of the message.  Null when the two readings do not line up.
+ */
+function stitch(parsed: Parsed, leaves: LeafPlan[]): Parsed | null {
+  const attachments: Parsed['attachments'] = [];
+  let bodies = 0;
+  let next = 0;
+
+  for (const leaf of leaves) {
+    if (leaf.kind === 'kept') {
+      if (leaf.body) continue; // the parser read this one, and it is in text/html
+      const taken = parsed.attachments[next++];
+      if (!taken) return null;
+      attachments.push(taken);
+      continue;
+    }
+
+    const part = leaf.part;
+    if (!part.text) {
+      attachments.push({
+        filename: part.name || null,
+        mimeType: part.mime,
+        disposition: 'attachment',
+        content: part.bytes,
+      });
+      continue;
+    }
+
+    // A body the parser did not read.  The order between one of these and a body
+    // it did read is not something this can put back, so that case reads whole.
+    bodies++;
+    const read = part.mime === 'text/html' ? parsed.html : parsed.text;
+    if (bodies > 1 || read) return null;
+    if (part.mime === 'text/html') parsed.html = textOf(part);
+    else parsed.text = textOf(part);
+  }
+
+  if (next !== parsed.attachments.length) return null;
+
+  parsed.attachments = attachments;
+  return parsed;
 }

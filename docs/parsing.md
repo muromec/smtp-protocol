@@ -1,8 +1,9 @@
 # Parsing a fetched message
 
-Status: written 2026-10-15, **not implemented**.  `EmailMessage.fromFetched`
-hands the whole message to postal-mime today.  That is correct for ordinary mail
-and too slow for a message that carries megabytes of payload.
+Status: **built** 2026-10-15 (`src/mime.ts`, `src/message.ts`).  A message at or
+below 64 KB takes exactly the path it took before this existed: it goes to
+postal-mime as one buffer.  A larger one is walked as octets first, and the
+payloads too big to be worth scanning are decoded here and put back afterwards.
 
 ## The problem, measured
 
@@ -32,53 +33,66 @@ The cost is the scan, not the encoding: a part with nothing to decode still cost
 | three `buf.indexOf(boundary)` over 9.3 MB | 0.7 ms |
 | `Buffer.from(wrappedBase64, 'base64')` — 6.8 MB decoded, line breaks left in | 53.9 ms |
 | `TextDecoder('utf-8')` over a 7 MB body | 17 ms |
-| `Buffer.concat` of two 4.8 MB halves | 4 ms |
 
 `Buffer.from(..., 'base64')` skips the line breaks itself and returns bytes
 identical to the source, so nothing has to be stripped first.
 
-## The shape
+## As built
 
-Split the message on bytes and decode with the platform's own decoders; keep the
-parser for the part it is good at, and small.
+`splitForParse(message, limit)` walks the message (`mime.ts`) and returns:
 
-1. Split the header block from the body at the first `\r\n\r\n` (`indexOf` over
-   bytes).
-2. The header block goes to postal-mime.  It is a few KB, and encoded words,
-   folded headers and address parsing are what it should keep doing.
-3. The body is walked as bytes.  A `Content-Type` carrying a `boundary` gives the
-   parts (`indexOf`), and each part is split the same way: its headers to
-   postal-mime, its payload decoded here — base64 in bulk, quoted-printable with
-   a small decoder, 7-bit / 8-bit / binary as they are — and its text through
-   `TextDecoder` with the charset its headers declare.
-4. The result is the shape the class already builds from: headers, text, html,
-   attachments (`name`, `mime`, `bytes`).
+- `forParser` — the same headers and the same structure, with every payload at or
+  above the limit replaced by nothing;
+- `leaves` — every leaf of the message in the order it appears: `kept` (the
+  parser will see it, and `body` says whether it is a text body) or `heavy` (the
+  parser will not, and the payload is decoded here — base64 in bulk,
+  quoted-printable by hand, 7-bit / 8-bit / binary as they are).
+
+`EmailMessage.fromFetched` then parses `forParser` and stitches: a heavy leaf
+that is a body becomes `text`/`html`, a heavy leaf that is not becomes an
+attachment, and each kept non-body leaf takes the next attachment the parser
+reported.  The rules the parser uses are the ones mirrored here — an
+`attachment` disposition wins over the type, and only `text/plain` and
+`text/html` are bodies.
+
+Two things send the message to the parser whole instead, with a line on stderr
+naming it: a heavy body beside a body the parser did read (the order between them
+is not something the stitch can reconstruct), and a walk whose leaf count does
+not match what the parser reported.
+
+Measured through the class, a 2 MB attachment:
+
+| | before | after |
+|---|---|---|
+| parse | > 5 s (the runner's own timeout) | 203 ms |
 
 ## What it does not do
 
-- It does not change what a message *means*: a part is still text, html or an
-  attachment by the same rules, and a message whose structure the walker does not
-  recognise falls back to postal-mime for the whole message, with a log line
-  naming what was not understood.
+- It does not change what a message means; the corpus test parses each fixture
+  both ways and compares text, html, attachment names, types and bytes.
 - No streaming: the message is in memory, as it is today.
 - No move off the process.  A copy over a local socket costs about 10 ms for
   6.8 MB, so size is not the objection to it — it makes a transport depend on
   another process being up, and it only pays while the payload fits in memory
-  anyway.  If a message ever gets big enough that memory rather than time binds,
-  that trade is worth deciding from a number.
+  anyway.
 
 ## Open
 
-- `filename*=UTF-8''...` (RFC 2231) in a part's `Content-Disposition`.  Postal-mime
-  handles it; a walker that reads the parameter itself has to handle it too.
-- A part that is itself a message (`message/rfc822`).
-- Whether the fallback is one log line per occurrence or a counter.
+- **Quoted-printable is the one place the two readings differ.**  Postal-mime
+  reads a QP payload as text: it normalises CRLF to LF and appends a newline (a
+  1024-byte payload comes back as 1025).  This walker returns the octets the
+  sender encoded, one shorter for such a part.  The corpus test states the
+  difference rather than hiding it.
+- `filename*=UTF-8''...` (RFC 2231) is handled for the single-value form the
+  corpus uses; a continuation (`filename*0*`) is not.
+- A part that is itself a message (`message/rfc822`) is treated as a leaf, where
+  postal-mime would parse it inline.
+- The limit (64 KB) is a first estimate: the parser costs about 1.5 ms per KB, so
+  it is worth re-measuring the stitch's own cost before moving it.
 
 ## Order of work
 
-1. `src/mime.ts` — the walker, with tests that compare it against postal-mime on
-   a corpus (plain, html, alternative, mixed, base64, quoted-printable, a charset
-   that is not UTF-8, nested multipart, and a body whose declared boundary never
-   appears), plus one coarse time bound that names the regression it guards.
-2. `fromFetched` uses it, and the existing suite stays green.
-3. Measured on a real message.
+1. ~~`docs/parsing.md`~~ — written first, as the series' first commit.
+2. ~~`src/mime.ts`, tested against postal-mime on a corpus~~ — done.
+3. ~~`fromFetched` uses it, the existing suite green~~ — done.
+4. Measured on a real message.
