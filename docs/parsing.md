@@ -66,6 +66,19 @@ Measured through the class, a 2 MB attachment:
 |---|---|---|
 | parse | > 5 s (the runner's own timeout) | 203 ms |
 
+And on a real one: a message from the mailbox with an 8.83 MB photo in it,
+fetched read-only (`BODY.PEEK[]`) and parsed both ways in the same process:
+
+| | |
+|---|---|
+| postal-mime on the whole message | 24 732 ms |
+| `fromFetched`, the walk | 149 ms |
+| text, html, attachment name and type | identical |
+| attachment bytes | 6 763 595 |
+
+That is 166× faster, and the loop is never held: 149 ms is a single scan's worth
+of work rather than twenty-five seconds of it.
+
 ## What it does not do
 
 - It does not change what a message means; the corpus test parses each fixture
@@ -95,4 +108,5 @@ Measured through the class, a 2 MB attachment:
 1. ~~`docs/parsing.md`~~ — written first, as the series' first commit.
 2. ~~`src/mime.ts`, tested against postal-mime on a corpus~~ — done.
 3. ~~`fromFetched` uses it, the existing suite green~~ — done.
-4. Measured on a real message.
+4. ~~Measured on a real message~~ — done: 24 732 ms to 149 ms, same text,
+   html, attachment name, type and bytes.
