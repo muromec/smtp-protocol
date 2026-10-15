@@ -79,6 +79,28 @@ fetched read-only (`BODY.PEEK[]`) and parsed both ways in the same process:
 That is 166× faster, and the loop is never held: 149 ms is a single scan's worth
 of work rather than twenty-five seconds of it.
 
+A sweep over one message shape at eight sizes, both ways, in this process (the
+parser warmed first, so its own setup is not counted):
+
+| payload | message | plain | walk |
+|---|---|---|---|
+| 8 KB | 0.01 MB | 40 ms | 39 ms |
+| 32 KB | 0.04 MB | 122 ms | 123 ms |
+| 64 KB | 0.09 MB | 241 ms | 15 ms |
+| 128 KB | 0.17 MB | 477 ms | 6 ms |
+| 256 KB | 0.34 MB | 953 ms | 8 ms |
+| 512 KB | 0.68 MB | 1 949 ms | 11 ms |
+| 1 MB | 1.37 MB | 3 988 ms | 47 ms |
+| 4 MB | 5.47 MB | 15 794 ms | 89 ms |
+
+The first two rows are the same path: the message is under the limit, so it went
+to the parser untouched.  From 64 KB up the walk costs single-digit milliseconds
+where the parser costs hundreds — and the walk's own overhead is small enough
+that the limit is **not** a performance line.  It is the line below which
+ordinary mail is left exactly as it was, which is why it stays at 64 KB: the walk
+is our code and the parser is not, and a message small enough to parse in a
+quarter of a second does not need to take that risk.
+
 ## What it does not do
 
 - It does not change what a message means; the corpus test parses each fixture
@@ -100,8 +122,9 @@ of work rather than twenty-five seconds of it.
   corpus uses; a continuation (`filename*0*`) is not.
 - A part that is itself a message (`message/rfc822`) is treated as a leaf, where
   postal-mime would parse it inline.
-- The limit (64 KB) is a first estimate: the parser costs about 1.5 ms per KB, so
-  it is worth re-measuring the stitch's own cost before moving it.
+- The limit (64 KB) is measured rather than guessed (see the sweep above): the
+  walk is cheaper from a few KB up, so keeping it where it is is a choice about
+  exposure, not about speed.
 
 ## Order of work
 
