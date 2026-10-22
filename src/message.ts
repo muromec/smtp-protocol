@@ -1,5 +1,6 @@
 import PostalMime from 'postal-mime';
 import { splitForParse, textOf, type LeafPlan } from './mime.ts';
+import { mimeTypeOf } from './media-type.ts';
 
 // ── types ──────────────────────────────────────────────────────────────────
 
@@ -12,6 +13,15 @@ export interface EmailHeaders {
   subject?: string;
   date?: Date;
   contentType?: string;
+}
+
+/** A file a composed message carries: its name, what it is, and the bytes. */
+export interface OutgoingAttachment {
+  /** The filename the recipient sees. */
+  name: string;
+  /** Its media type; read from the name when the caller does not say. */
+  mime?: string;
+  bytes: Uint8Array;
 }
 
 /** A part of a message that is not its text body: what the sender called it, and its bytes. */
@@ -36,6 +46,8 @@ export interface OutgoingEmail {
   references?: string[];
   /** Auto-generated from `from` domain if omitted. */
   messageId?: string;
+  /** Files carried beside the text; a message with any of them is `multipart/mixed`. */
+  attachments?: OutgoingAttachment[];
 }
 
 /**
@@ -58,6 +70,9 @@ export class EmailMessage {
   #parsePromise: Promise<Parsed> | null = null;
   #outboundHeaders: EmailHeaders;
   #outboundText: string;
+  #outboundAttachments: OutgoingAttachment[] = [];
+  /** One delimiter for this message, made once so two calls to `toRfc822` agree. */
+  readonly #boundary = `=_dopje_${crypto.randomUUID()}`;
 
   private constructor() {
     this.uid = 0;
@@ -110,6 +125,7 @@ export class EmailMessage {
       date: new Date(),
     };
     msg.#outboundText = opts.text;
+    msg.#outboundAttachments = opts.attachments ?? [];
     (msg as { raw: string }).raw = msg.toRfc822();
     return msg;
   }
@@ -119,6 +135,8 @@ export class EmailMessage {
    */
   toRfc822(): string {
     const h = this.headers;
+    const files = this.outbound ? this.#outboundAttachments : [];
+    const boundary = this.#boundary;
     const headers = [
       'MIME-Version: 1.0',
       'User-Agent: Mozilla Thunderbird',
@@ -130,13 +148,41 @@ export class EmailMessage {
       `From: ${h.from?.name ? `${h.from.name} <${h.from.address ?? ''}>` : (h.from?.address ?? '')}`,
       `Subject: ${h.subject ?? ''}`,
       `Date: ${(h.date ?? new Date()).toUTCString()}`,
-      'Content-Type: text/plain; charset=UTF-8; format=flowed',
-      'Content-Transfer-Encoding: 7bit',
+      ...(files.length === 0
+        ? ['Content-Type: text/plain; charset=UTF-8; format=flowed', 'Content-Transfer-Encoding: 7bit']
+        : [`Content-Type: multipart/mixed; boundary="${boundary}"`]),
     ]
       .filter(Boolean)
       .join('\r\n');
 
-    return `${headers}\r\n\r\n${this.text}`;
+    if (files.length === 0) return `${headers}\r\n\r\n${this.text}`;
+
+    // The text is a part like any other once there are attachments, and the files follow it:
+    // base64 because a mail is a text protocol and a picture is not text.
+    const parts: string[] = [
+      [
+        `--${boundary}`,
+        'Content-Type: text/plain; charset=UTF-8; format=flowed',
+        'Content-Transfer-Encoding: 7bit',
+        '',
+        this.text,
+      ].join('\r\n'),
+    ];
+    for (const file of files) {
+      const mime = file.mime ?? mimeTypeOf(file.name);
+      parts.push(
+        [
+          `--${boundary}`,
+          `Content-Type: ${mime};${filenameParameter(file.name)}`,
+          'Content-Transfer-Encoding: base64',
+          `Content-Disposition: attachment;${filenameParameter(file.name)}`,
+          '',
+          wrapBase64(file.bytes),
+        ].join('\r\n'),
+      );
+    }
+    parts.push(`--${boundary}--`, '');
+    return `${headers}\r\n\r\n${parts.join('\r\n')}`;
   }
 
   // ── headers ────────────────────────────────────────────────────────────
@@ -329,4 +375,26 @@ function stitch(parsed: Parsed, leaves: LeafPlan[]): Parsed | null {
 
   parsed.attachments = attachments;
   return parsed;
+}
+
+/**
+ * A `filename` parameter a header can carry: quoted when the name is ASCII, and RFC 2231's
+ * `filename*=UTF-8''…` when it is not, because a bare non-ASCII byte in a header is not a name
+ * every client will read back.
+ */
+function filenameParameter(name: string): string {
+  if (/^[\x20-\x7e]*$/.test(name)) return ` filename="${name.replace(/(["\\])/g, '\\$1')}"`;
+  const encoded = encodeURIComponent(name).replace(
+    /['()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return ` filename*=UTF-8''${encoded}`;
+}
+
+/** Base64 of the bytes, wrapped where a mail line ends. */
+function wrapBase64(bytes: Uint8Array): string {
+  const base64 = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('base64');
+  const lines: string[] = [];
+  for (let at = 0; at < base64.length; at += 76) lines.push(base64.slice(at, at + 76));
+  return lines.join('\r\n');
 }
