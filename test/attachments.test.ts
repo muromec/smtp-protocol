@@ -88,3 +88,51 @@ describe('composing with attachments', () => {
     expect(raw).not.toContain('multipart');
   });
 });
+
+describe('composing with an HTML body', () => {
+  it('carries the HTML beside the text, and both arrive', async () => {
+    const composed = EmailMessage.compose({
+      from: 'me@example.org',
+      to: 'you@example.org',
+      subject: 'bold',
+      text: '**bold**',
+      html: '<strong>bold</strong>',
+    });
+
+    const raw = composed.toRfc822();
+    expect(raw).toContain('multipart/alternative');
+
+    const parsed = await EmailMessage.fromFetched(raw);
+    expect(parsed.text.trim()).toBe('**bold**');
+    expect(parsed.html).toContain('<strong>bold</strong>');
+  });
+
+  it('puts the alternative inside the mixed message when there are files too', async () => {
+    const composed = EmailMessage.compose({
+      from: 'me@example.org',
+      to: 'you@example.org',
+      subject: 'both',
+      text: 'see attached',
+      html: '<p>see attached</p>',
+      attachments: [{ name: 'a.txt', bytes: new TextEncoder().encode('x') }],
+    });
+
+    const raw = composed.toRfc822();
+    expect(raw).toContain('multipart/mixed');
+    expect(raw).toContain('multipart/alternative');
+
+    const parsed = await EmailMessage.fromFetched(raw);
+    expect(parsed.html).toContain('see attached');
+    expect(parsed.attachments).toHaveLength(1);
+  });
+
+  it('sends no HTML when there is none — the plain shape is unchanged', async () => {
+    const composed = EmailMessage.compose({
+      from: 'me@example.org',
+      to: 'you@example.org',
+      subject: 'plain',
+      text: 'just words',
+    });
+    expect(composed.toRfc822()).not.toContain('multipart');
+  });
+});

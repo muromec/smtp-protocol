@@ -42,6 +42,8 @@ export interface OutgoingEmail {
   to: string;
   subject: string;
   text: string;
+  /** An HTML body, carried beside the text as `multipart/alternative` — never instead of it. */
+  html?: string;
   inReplyTo?: string;
   references?: string[];
   /** Auto-generated from `from` domain if omitted. */
@@ -70,6 +72,7 @@ export class EmailMessage {
   #parsePromise: Promise<Parsed> | null = null;
   #outboundHeaders: EmailHeaders;
   #outboundText: string;
+  #outboundHtml: string | undefined;
   #outboundAttachments: OutgoingAttachment[] = [];
   /** One delimiter for this message, made once so two calls to `toRfc822` agree. */
   readonly #boundary = `=_dopje_${crypto.randomUUID()}`;
@@ -125,6 +128,7 @@ export class EmailMessage {
       date: new Date(),
     };
     msg.#outboundText = opts.text;
+    msg.#outboundHtml = opts.html;
     msg.#outboundAttachments = opts.attachments ?? [];
     (msg as { raw: string }).raw = msg.toRfc822();
     return msg;
@@ -136,7 +140,9 @@ export class EmailMessage {
   toRfc822(): string {
     const h = this.headers;
     const files = this.outbound ? this.#outboundAttachments : [];
+    const html = this.outbound ? this.#outboundHtml : undefined;
     const boundary = this.#boundary;
+    const alternative = html !== undefined ? `${boundary}_alt` : undefined;
     const headers = [
       'MIME-Version: 1.0',
       'User-Agent: Mozilla Thunderbird',
@@ -148,24 +154,52 @@ export class EmailMessage {
       `From: ${h.from?.name ? `${h.from.name} <${h.from.address ?? ''}>` : (h.from?.address ?? '')}`,
       `Subject: ${h.subject ?? ''}`,
       `Date: ${(h.date ?? new Date()).toUTCString()}`,
-      ...(files.length === 0
+      ...(files.length === 0 && alternative === undefined
         ? ['Content-Type: text/plain; charset=UTF-8; format=flowed', 'Content-Transfer-Encoding: 7bit']
-        : [`Content-Type: multipart/mixed; boundary="${boundary}"`]),
+        : [
+            `Content-Type: ${files.length === 0 ? 'multipart/alternative' : 'multipart/mixed'}; ` +
+              `boundary="${files.length === 0 ? alternative : boundary}"`,
+          ]),
     ]
       .filter(Boolean)
       .join('\r\n');
 
-    if (files.length === 0) return `${headers}\r\n\r\n${this.text}`;
+    if (files.length === 0 && alternative === undefined) return `${headers}\r\n\r\n${this.text}`;
 
-    // The text is a part like any other once there are attachments, and the files follow it:
-    // base64 because a mail is a text protocol and a picture is not text.
+    // The parts of an alternative: the text first, the HTML second, never the HTML alone — a
+    // client that reads no HTML must still read the mail.
+    const alternativeParts = (): string[] => [
+      `--${alternative}`,
+      'Content-Type: text/plain; charset=UTF-8; format=flowed',
+      'Content-Transfer-Encoding: 7bit',
+      '',
+      this.text,
+      `--${alternative}`,
+      'Content-Type: text/html; charset=UTF-8',
+      'Content-Transfer-Encoding: 8bit',
+      '',
+      html ?? '',
+      `--${alternative}--`,
+    ];
+    const plainPart = (): string[] => [
+      'Content-Type: text/plain; charset=UTF-8; format=flowed',
+      'Content-Transfer-Encoding: 7bit',
+      '',
+      this.text,
+    ];
+
+    // No files and an HTML body: the message *is* the alternative, so its own parts are the body.
+    if (files.length === 0) return `${headers}\r\n\r\n${alternativeParts().join('\r\n')}\r\n`;
+
+    // Files: `multipart/mixed`, whose first part is the body — an alternative when there is HTML,
+    // the plain text otherwise — and whose remaining parts are the files, base64 because a mail is
+    // a text protocol and a picture is not text.
     const parts: string[] = [
       [
         `--${boundary}`,
-        'Content-Type: text/plain; charset=UTF-8; format=flowed',
-        'Content-Transfer-Encoding: 7bit',
-        '',
-        this.text,
+        ...(alternative === undefined
+          ? plainPart()
+          : [`Content-Type: multipart/alternative; boundary="${alternative}"`, '', ...alternativeParts()]),
       ].join('\r\n'),
     ];
     for (const file of files) {
